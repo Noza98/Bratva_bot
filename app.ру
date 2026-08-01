@@ -1,0 +1,187 @@
+import asyncio
+import sqlite3
+import uuid
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
+
+from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import CommandStart, CommandObject
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+
+# ============ НАСТРОЙКИ — ЗАПОЛНИТЕ ЭТО ============
+TOKEN = 8982442416:AAEpJUCo3wJKgEmWjj7zw6y3qEEv2NIEA54
+ADMIN_ID = 8229032580           
+BOT_USERNAME = "Bratva_br_bot"  # username бота без @
+SERVICES = ["Стрижка", "Борода", "Стрижка + борода"]
+# =====================================================
+
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
+
+scheduler = AsyncIOScheduler(jobstores={
+    "default": SQLAlchemyJobStore(url="sqlite:///jobs.sqlite")
+})
+
+DB_PATH = "bookings.db"
+
+
+def db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    conn = db()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS bookings (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            phone TEXT,
+            service TEXT,
+            visit_time TEXT,
+            telegram_user_id INTEGER,
+            confirmed INTEGER DEFAULT 0,
+            created_at TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+# ---------------- Telegram bot handlers ----------------
+
+@dp.message(CommandStart())
+async def start_handler(message: types.Message, command: CommandObject):
+    booking_id = command.args
+    if not booking_id:
+        await message.answer(
+            "Привет! Это бот барбершопа. Записаться можно на сайте — "
+            "ссылку вам пришлют после записи."
+        )
+        return
+
+    conn = db()
+    row = conn.execute("SELECT * FROM bookings WHERE id = ?", (booking_id,)).fetchone()
+    if not row:
+        await message.answer("Не нашёл вашу запись. Попробуйте записаться заново на сайте.")
+        conn.close()
+        return
+
+    conn.execute(
+        "UPDATE bookings SET telegram_user_id = ?, confirmed = 1 WHERE id = ?",
+        (message.from_user.id, booking_id)
+    )
+    conn.commit()
+
+    visit_time = datetime.fromisoformat(row["visit_time"])
+    await message.answer(
+        f"Отлично! Вы записаны:\n"
+        f"Услуга: {row['service']}\n"
+        f"Время: {visit_time.strftime('%d.%m %H:%M')}\n\n"
+        f"Я пришлю напоминание за час до визита ✅"
+    )
+
+    await bot.send_message(
+        ADMIN_ID,
+        f"🔔 Клиент {row['name']} подключил напоминания в Telegram "
+        f"(визит {visit_time.strftime('%d.%m %H:%M')})"
+    )
+
+    schedule_reminder(booking_id, message.from_user.id, visit_time)
+    conn.close()
+
+
+def schedule_reminder(booking_id: str, user_id: int, visit_time: datetime):
+    remind_time = visit_time - timedelta(hours=1)
+    if remind_time <= datetime.now():
+        return
+    scheduler.add_job(
+        send_reminder,
+        "date",
+        run_date=remind_time,
+        args=[user_id, visit_time],
+        id=f"remind_{booking_id}",
+        replace_existing=True
+    )
+
+
+async def send_reminder(user_id: int, visit_time: datetime):
+    await bot.send_message(
+        user_id,
+        f"⏰ Напоминаем: сегодня в {visit_time.strftime('%H:%M')} у вас визит к барберу!"
+    )
+
+
+# ---------------- FastAPI (сайт + API) ----------------
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    scheduler.start()
+    asyncio.create_task(dp.start_polling(bot))
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+class BookingIn(BaseModel):
+    name: str
+    phone: str
+    service: str
+    visit_time: str
+
+
+@app.get("/")
+async def index():
+    return FileResponse("static/index.html")
+
+
+@app.get("/api/services")
+async def get_services():
+    return {"services": SERVICES}
+
+
+@app.post("/api/book")
+async def create_booking(booking: BookingIn):
+    try:
+        visit_time = datetime.fromisoformat(booking.visit_time)
+    except ValueError:
+        raise HTTPException(400, "Неверный формат времени")
+
+    if visit_time <= datetime.now():
+        raise HTTPException(400, "Время визита уже прошло")
+
+    booking_id = str(uuid.uuid4())[:8]
+    conn = db()
+    conn.execute(
+        "INSERT INTO bookings (id, name, phone, service, visit_time, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (booking_id, booking.name, booking.phone, booking.service,
+         visit_time.isoformat(), datetime.now().isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+    await bot.send_message(
+        ADMIN_ID,
+        f"📅 Новая запись с сайта!\n"
+        f"Имя: {booking.name}\n"
+        f"Телефон: {booking.phone}\n"
+        f"Услуга: {booking.service}\n"
+        f"Время: {visit_time.strftime('%d.%m %H:%M')}\n\n"
+        f"Напоминание клиенту сработает, только если он подключит Telegram-бота."
+    )
+
+    telegram_link = f"https://t.me/{BOT_USERNAME}?start={booking_id}"
+    return {"booking_id": booking_id, "telegram_link": telegram_link}
+
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
