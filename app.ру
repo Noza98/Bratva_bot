@@ -1,3 +1,4 @@
+import os
 import asyncio
 import sqlite3
 import uuid
@@ -14,9 +15,9 @@ from aiogram.filters import CommandStart, CommandObject
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 
-# ============ НАСТРОЙКИ — ЗАПОЛНИТЕ ЭТО ============
-TOKEN = 8982442416:AAEpJUCo3wJKgEmWjj7zw6y3qEEv2NIEA54
-ADMIN_ID = 8229032580           
+# ============ НАСТРОЙКИ ============
+TOKEN = os.environ["BOT_TOKEN"]
+ADMIN_ID = int(os.environ["ADMIN_ID"])
 BOT_USERNAME = "Bratva_br_bot"  # username бота без @
 SERVICES = ["Стрижка", "Борода", "Стрижка + борода"]
 # =====================================================
