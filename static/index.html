@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Запись к барберу</title>
+<style>
+  body {
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    background: #0f1115;
+    color: #fff;
+    margin: 0;
+    padding: 24px 16px;
+    display: flex;
+    justify-content: center;
+  }
+  .card {
+    background: #1a1d24;
+    border-radius: 16px;
+    padding: 24px;
+    max-width: 420px;
+    width: 100%;
+  }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  p.sub { color: #9aa0ab; margin-top: 0; margin-bottom: 20px; }
+  label { display: block; margin: 14px 0 6px; font-size: 14px; color: #c7ccd6; }
+  input, select {
+    width: 100%;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid #2c2f38;
+    background: #12141a;
+    color: #fff;
+    box-sizing: border-box;
+    font-size: 15px;
+  }
+  button {
+    width: 100%;
+    margin-top: 22px;
+    padding: 14px;
+    border: none;
+    border-radius: 10px;
+    background: #3390ec;
+    color: #fff;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.6; }
+  .result {
+    margin-top: 20px;
+    padding: 16px;
+    border-radius: 10px;
+    background: #16321f;
+    display: none;
+  }
+  .result a {
+    display: inline-block;
+    margin-top: 10px;
+    background: #229ed9;
+    color: #fff;
+    text-decoration: none;
+    padding: 10px 16px;
+    border-radius: 8px;
+    font-weight: 600;
+  }
+  .error { color: #ff6b6b; font-size: 14px; margin-top: 10px; display: none; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Запись к барберу</h1>
+  <p class="sub">Выберите услугу и удобное время</p>
+
+  <form id="bookingForm">
+    <label>Имя</label>
+    <input type="text" id="name" required>
+
+    <label>Телефон</label>
+    <input type="tel" id="phone" placeholder="+7 999 123 45 67" required>
+
+    <label>Услуга</label>
+    <select id="service" required></select>
+
+    <label>Дата</label>
+    <input type="date" id="date" required>
+
+    <label>Время</label>
+    <input type="time" id="time" required>
+
+    <button type="submit">Записаться</button>
+    <div class="error" id="error"></div>
+  </form>
+
+  <div class="result" id="result">
+    <div id="resultText"></div>
+    <a id="telegramLink" href="#" target="_blank">Подключить напоминания в Telegram</a>
+  </div>
+</div>
+
+<script>
+async function loadServices() {
+  const res = await fetch('/api/services');
+  const data = await res.json();
+  const select = document.getElementById('service');
+  data.services.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s;
+    opt.textContent = s;
+    select.appendChild(opt);
+  });
+}
+loadServices();
+
+document.getElementById('bookingForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errorEl = document.getElementById('error');
+  errorEl.style.display = 'none';
+
+  const date = document.getElementById('date').value;
+  const time = document.getElementById('time').value;
+  const visit_time = `${date}T${time}:00`;
+
+  const payload = {
+    name: document.getElementById('name').value,
+    phone: document.getElementById('phone').value,
+    service: document.getElementById('service').value,
+    visit_time: visit_time
+  };
+
+  try {
+    const res = await fetch('/api/book', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      errorEl.textContent = data.detail || 'Ошибка записи';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    document.getElementById('bookingForm').style.display = 'none';
+    document.getElementById('result').style.display = 'block';
+    document.getElementById('resultText').textContent =
+      'Вы записаны! Нажмите кнопку ниже, чтобы получать напоминание в Telegram.';
+    document.getElementById('telegramLink').href = data.telegram_link;
+
+  } catch (err) {
+    errorEl.textContent = 'Не удалось связаться с сервером';
+    errorEl.style.display = 'block';
+  }
+});
+</script>
+</body>
+</html>
